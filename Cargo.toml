@@ -1,0 +1,20 @@
+[package]
+name = "dubastrolog"
+version = "0.1.100"
+edition = "2024"
+description = "Journal d'observation et d'astrophotographie"
+publish = false
+
+[dependencies]
+chrono = "0.4"
+eframe = "0.37"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+open = "5"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[build-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+winresource = "0.1.34"
