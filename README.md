@@ -2,8 +2,6 @@
 
 **Version : 0.1.100**
 
-> Lorsque vous modifiez la version dans `Cargo.toml`, mettez à jour la ligne **Version** ci-dessus en conséquence.
-
 ---
 
 ## Français
