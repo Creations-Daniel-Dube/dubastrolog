@@ -1734,7 +1734,7 @@ impl App {
 
     fn status(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(format!("Journal : {}", store::data_dir().display()));
+            ui.label(format!("Journal : {}", store::journal_path().display()));
             if !self.can_save {
                 ui.label("Enregistrement bloqué");
             }

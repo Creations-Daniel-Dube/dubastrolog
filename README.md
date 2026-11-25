@@ -23,6 +23,16 @@
 - **Soirée au reflex** — Choisir boîtier et objectif pour une soirée ; pour un zoom, indiquer la focale utilisée sur chaque objet photographié.
 - **Suppression** — Supprimer une soirée (avec confirmation) ainsi que les pièces jointes qui lui sont associées.
 
+### Données et distribution
+
+- **Hors de l’exécutable** — Profils, soirées et pièces jointes ne sont pas inclus dans `dubastrolog.exe`. Chaque utilisateur a son propre journal sur son poste.
+- **Emplacement (Windows)** — Fichier `journal.json` et dossier `media/` sous `%APPDATA%\dubastrolog` (barre d’état en bas de la fenêtre : chemin complet du journal).
+- **Première installation** — Si `journal.json` n’existe pas encore, l’application démarre avec des profils et des soirées vides. Les données sont créées lors du premier enregistrement.
+- **Mise à jour** — Distribuer uniquement le nouveau `.exe` : le journal existant est conservé tel quel.
+- **À ne pas inclure dans un zip** — Ne joignez pas de copie de `journal.json`, du dossier `media/` ni d’un dossier `dubastrolog/` de développement.
+
+**Développeur** — Tester une « première installation » sur votre propre compte Windows ne suffit pas : le programme relira votre journal habituel dans AppData. Utilisez un autre compte Windows, une autre machine, ou renommez temporairement `%APPDATA%\dubastrolog` avant le test.
+
 ---
 
 ## English
@@ -43,3 +53,13 @@
 - **Reusable profiles** — Manage observing sites, telescopes, astro cameras, DSLR bodies, lenses (prime or zoom), and smart telescopes for reuse across nights; remove an unused profile (with confirmation).
 - **DSLR nights** — Pick body and lens for a night; for a zoom lens, record the focal length used on each photographed target.
 - **Deletion** — Remove a night (with confirmation) and its associated attachments.
+
+### Data and distribution
+
+- **Not inside the executable** — Profiles, nights, and attachments are not bundled in `dubastrolog.exe`. Each user keeps a separate journal on their machine.
+- **Location (Windows)** — `journal.json` and the `media/` folder live under `%APPDATA%\dubastrolog` (status bar at the bottom of the window shows the full journal path).
+- **First install** — If `journal.json` does not exist yet, the app starts with empty profiles and nights. Data is created on first save.
+- **Upgrade** — Ship only the new `.exe`; the existing journal is preserved.
+- **Do not zip with the app** — Do not attach a copy of `journal.json`, a `media/` folder, or a development `dubastrolog/` directory.
+
+**Developer note** — Testing a “fresh install” on your own Windows account is not enough: the app will reload your usual AppData journal. Use another Windows account, another machine, or temporarily rename `%APPDATA%\dubastrolog` before testing.

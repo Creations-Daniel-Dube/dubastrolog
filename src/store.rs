@@ -112,4 +112,26 @@ mod tests {
         assert_eq!(loaded, journal);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn missing_journal_path_uses_default() {
+        let dir =
+            std::env::temp_dir().join(format!("dubastrolog-store-{}", crate::model::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("journal.json");
+        assert!(!path.exists());
+
+        let (journal, notice) = if !path.exists() {
+            (Journal::default(), None)
+        } else {
+            match load_from(&path) {
+                Ok(journal) => (journal, None),
+                Err(err) => (Journal::default(), Some(err)),
+            }
+        };
+
+        assert!(notice.is_none());
+        assert_eq!(journal, Journal::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
