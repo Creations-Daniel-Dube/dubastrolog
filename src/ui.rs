@@ -5,9 +5,9 @@ use eframe::egui::{self, Color32, Frame, RichText, Stroke};
 
 use crate::attachments::{self, is_image, open_file};
 use crate::model::{
-    Attachment, Camera, CameraKind, Instrument, InstrumentKind, Journal, ObserveMode, ProfileKind,
-    Session, Site, SmartTelescope, Target, TargetInstrumentKind, TargetKind, Telescope, display_name,
-    is_iso_date, profile_usages,
+    Attachment, Camera, CameraKind, DslrLens, Instrument, InstrumentKind, Journal, LensKind,
+    ObserveMode, ProfileKind, Session, Site, SmartTelescope, Target, TargetInstrumentKind,
+    TargetKind, Telescope, display_name, find_lens, is_iso_date, profile_usages,
 };
 use crate::query::{self, nights_in_year, photos_of};
 use crate::store;
@@ -26,13 +26,16 @@ enum ProfileTab {
     Telescopes,
     Cameras,
     Dslr,
+    Lenses,
     Smart,
 }
 
 struct Catalog {
     sites: Vec<(String, String)>,
     telescopes: Vec<(String, String)>,
-    cameras: Vec<(String, String)>,
+    astro_cameras: Vec<(String, String)>,
+    dslr_bodies: Vec<(String, String)>,
+    lenses: Vec<(String, String)>,
     smarts: Vec<(String, String)>,
 }
 
@@ -41,7 +44,9 @@ impl Catalog {
         Self {
             sites: names(&journal.sites, |site| &site.id, |site| &site.name),
             telescopes: names(&journal.telescopes, |item| &item.id, |item| &item.name),
-            cameras: names(&journal.cameras, |item| &item.id, |item| &item.name),
+            astro_cameras: camera_names(&journal.cameras, CameraKind::Astro),
+            dslr_bodies: camera_names(&journal.cameras, CameraKind::Dslr),
+            lenses: names(&journal.lenses, |item| &item.id, |item| &item.name),
             smarts: names(&journal.smart_scopes, |item| &item.id, |item| &item.name),
         }
     }
@@ -101,7 +106,9 @@ pub struct App {
     selected_telescope: Option<String>,
     selected_camera: Option<String>,
     selected_smart: Option<String>,
+    selected_lens: Option<String>,
     pending_delete: Option<String>,
+    pending_profile_delete: Option<(ProfileTab, String)>,
     notice: Option<String>,
     thumbs: HashMap<String, Option<egui::TextureHandle>>,
     object_query: String,
@@ -129,6 +136,7 @@ impl App {
             selected_telescope: journal.telescopes.first().map(|item| item.id.clone()),
             selected_camera: journal.cameras.first().map(|item| item.id.clone()),
             selected_smart: journal.smart_scopes.first().map(|item| item.id.clone()),
+            selected_lens: journal.lenses.first().map(|item| item.id.clone()),
             notice,
             journal,
             saved_text,
@@ -137,6 +145,7 @@ impl App {
             profiles_open: false,
             profile_tab: ProfileTab::Sites,
             pending_delete: None,
+            pending_profile_delete: None,
             thumbs: HashMap::new(),
             object_query: String::new(),
             year_query: String::new(),
@@ -236,6 +245,7 @@ impl App {
             .clicked()
         {
             self.profiles_open = true;
+            self.ensure_profile_selection();
         }
         ui.add_space(8.0);
         ui.add(
@@ -342,6 +352,7 @@ impl App {
             &catalog.sites,
             "Aucun",
         );
+        let instrument_kind = session.instrument.kind;
         ui.horizontal(|ui| {
             ui.selectable_value(
                 &mut session.instrument.kind,
@@ -350,10 +361,18 @@ impl App {
             );
             ui.selectable_value(
                 &mut session.instrument.kind,
+                InstrumentKind::Dslr,
+                "Reflex",
+            );
+            ui.selectable_value(
+                &mut session.instrument.kind,
                 InstrumentKind::Smart,
                 "Télescope intelligent",
             );
         });
+        if session.instrument.kind != instrument_kind {
+            sanitize_instrument(&mut session.instrument);
+        }
         match session.instrument.kind {
             InstrumentKind::Telescope => {
                 combo_option(
@@ -369,8 +388,26 @@ impl App {
                     "session-camera",
                     "Caméra",
                     &mut session.instrument.camera_id,
-                    &catalog.cameras,
+                    &catalog.astro_cameras,
                     "Aucune",
+                );
+            }
+            InstrumentKind::Dslr => {
+                combo_option(
+                    ui,
+                    "session-dslr",
+                    "Boîtier",
+                    &mut session.instrument.camera_id,
+                    &catalog.dslr_bodies,
+                    "Aucun",
+                );
+                combo_option(
+                    ui,
+                    "session-lens",
+                    "Objectif",
+                    &mut session.instrument.lens_id,
+                    &catalog.lenses,
+                    "Aucun",
                 );
             }
             InstrumentKind::Smart => {
@@ -580,6 +617,14 @@ impl App {
             .find(|session| session.id == session_id)
             .map(|session| describe_instrument(&session.instrument, &catalog))
             .unwrap_or_default();
+        let session_dslr_lens = self
+            .journal
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .filter(|session| session.instrument.kind == InstrumentKind::Dslr)
+            .and_then(|session| session.instrument.lens_id.clone());
+        let lenses = self.journal.lenses.clone();
         if let Some(target) = self.target_mut(session_id, &target_id) {
             labeled(ui, "Nom", &mut target.name, "M42");
             enum_combo(
@@ -597,6 +642,7 @@ impl App {
                 &ObserveMode::all().map(|mode| (mode, mode.label())),
             );
             labeled(ui, "Heure", &mut target.time, "21:10");
+            let target_instrument_kind = target.instrument_kind;
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(
                     &mut target.instrument_kind,
@@ -610,10 +656,18 @@ impl App {
                 );
                 ui.selectable_value(
                     &mut target.instrument_kind,
+                    TargetInstrumentKind::Dslr,
+                    "Autre reflex",
+                );
+                ui.selectable_value(
+                    &mut target.instrument_kind,
                     TargetInstrumentKind::Smart,
                     "Télescope intelligent",
                 );
             });
+            if target.instrument_kind != target_instrument_kind {
+                sanitize_target_instrument(target);
+            }
             match target.instrument_kind {
                 TargetInstrumentKind::Session => {
                     ui.label(format!("Utilise l'instrument de la soirée — {inherited}"));
@@ -632,8 +686,26 @@ impl App {
                         "target-camera",
                         "Caméra",
                         &mut target.camera_id,
-                        &catalog.cameras,
+                        &catalog.astro_cameras,
                         "Aucune",
+                    );
+                }
+                TargetInstrumentKind::Dslr => {
+                    combo_option(
+                        ui,
+                        "target-dslr",
+                        "Boîtier",
+                        &mut target.camera_id,
+                        &catalog.dslr_bodies,
+                        "Aucun",
+                    );
+                    combo_option(
+                        ui,
+                        "target-lens",
+                        "Objectif",
+                        &mut target.lens_id,
+                        &catalog.lenses,
+                        "Aucun",
                     );
                 }
                 TargetInstrumentKind::Smart => {
@@ -646,6 +718,20 @@ impl App {
                         "Aucun",
                     );
                 }
+            }
+            let lens_for_focal = match target.instrument_kind {
+                TargetInstrumentKind::Session => session_dslr_lens.clone(),
+                TargetInstrumentKind::Dslr => target.lens_id.clone(),
+                _ => None,
+            };
+            if matches!(target.mode, ObserveMode::Photo | ObserveMode::Both) {
+                dslr_zoom_focal_field(
+                    ui,
+                    "target-lens-focal",
+                    &lenses,
+                    &lens_for_focal,
+                    &mut target.lens_focal_mm,
+                );
             }
             labeled(ui, "Filtre", &mut target.filter, "Dual band");
             labeled(ui, "Gain ou ISO", &mut target.gain_iso, "gain 200");
@@ -976,24 +1062,35 @@ impl App {
                 .clicked()
             {
                 self.profile_tab = ProfileTab::Sites;
+                self.ensure_profile_selection();
             }
             if ui
                 .selectable_label(self.profile_tab == ProfileTab::Telescopes, "Télescopes")
                 .clicked()
             {
                 self.profile_tab = ProfileTab::Telescopes;
+                self.ensure_profile_selection();
             }
             if ui
                 .selectable_label(self.profile_tab == ProfileTab::Cameras, "Caméras astro")
                 .clicked()
             {
                 self.profile_tab = ProfileTab::Cameras;
+                self.ensure_profile_selection();
             }
             if ui
                 .selectable_label(self.profile_tab == ProfileTab::Dslr, "Reflex")
                 .clicked()
             {
                 self.profile_tab = ProfileTab::Dslr;
+                self.ensure_profile_selection();
+            }
+            if ui
+                .selectable_label(self.profile_tab == ProfileTab::Lenses, "Objectifs")
+                .clicked()
+            {
+                self.profile_tab = ProfileTab::Lenses;
+                self.ensure_profile_selection();
             }
             if ui
                 .selectable_label(
@@ -1003,16 +1100,21 @@ impl App {
                 .clicked()
             {
                 self.profile_tab = ProfileTab::Smart;
+                self.ensure_profile_selection();
             }
         });
         ui.separator();
         let mut add = false;
         let mut delete = false;
+        let can_delete = self.profile_selected_in_tab();
         ui.horizontal(|ui| {
             if ui.button("Ajouter").clicked() {
                 add = true;
             }
-            if ui.button("Supprimer").clicked() {
+            if ui
+                .add_enabled(can_delete, egui::Button::new("Supprimer"))
+                .clicked()
+            {
                 delete = true;
             }
         });
@@ -1020,7 +1122,7 @@ impl App {
             self.add_profile();
         }
         if delete {
-            self.delete_profile();
+            self.request_delete_profile();
         }
         let items = self.profile_items();
         ui.columns(2, |columns| {
@@ -1038,6 +1140,9 @@ impl App {
             }
             ProfileTab::Cameras => camera_names(&self.journal.cameras, CameraKind::Astro),
             ProfileTab::Dslr => camera_names(&self.journal.cameras, CameraKind::Dslr),
+            ProfileTab::Lenses => {
+                names(&self.journal.lenses, |item| &item.id, |item| &item.name)
+            }
             ProfileTab::Smart => names(
                 &self.journal.smart_scopes,
                 |item| &item.id,
@@ -1078,6 +1183,7 @@ impl App {
             ProfileTab::Sites => self.selected_site.as_ref(),
             ProfileTab::Telescopes => self.selected_telescope.as_ref(),
             ProfileTab::Cameras | ProfileTab::Dslr => self.selected_camera.as_ref(),
+            ProfileTab::Lenses => self.selected_lens.as_ref(),
             ProfileTab::Smart => self.selected_smart.as_ref(),
         }
     }
@@ -1087,6 +1193,7 @@ impl App {
             ProfileTab::Sites => self.selected_site = Some(id),
             ProfileTab::Telescopes => self.selected_telescope = Some(id),
             ProfileTab::Cameras | ProfileTab::Dslr => self.selected_camera = Some(id),
+            ProfileTab::Lenses => self.selected_lens = Some(id),
             ProfileTab::Smart => self.selected_smart = Some(id),
         }
     }
@@ -1113,6 +1220,11 @@ impl App {
                 self.selected_camera = Some(camera.id.clone());
                 self.journal.cameras.push(camera);
             }
+            ProfileTab::Lenses => {
+                let lens = DslrLens::create();
+                self.selected_lens = Some(lens.id.clone());
+                self.journal.lenses.push(lens);
+            }
             ProfileTab::Smart => {
                 let scope = SmartTelescope::create();
                 self.selected_smart = Some(scope.id.clone());
@@ -1121,23 +1233,66 @@ impl App {
         }
     }
 
-    fn delete_profile(&mut self) {
+    fn profile_selected_in_tab(&self) -> bool {
+        let Some(id) = self.selected_profile() else {
+            return false;
+        };
+        self.profile_items()
+            .iter()
+            .any(|(item_id, _)| item_id == id)
+    }
+
+    fn ensure_profile_selection(&mut self) {
+        let items = self.profile_items();
+        let valid = self.selected_profile().is_some_and(|id| {
+            items.iter().any(|(item_id, _)| item_id == id)
+        });
+        if valid {
+            return;
+        }
+        if let Some((id, _)) = items.first() {
+            self.set_selected_profile(id.clone());
+        } else {
+            self.clear_profile_selection();
+        }
+    }
+
+    fn clear_profile_selection(&mut self) {
+        match self.profile_tab {
+            ProfileTab::Sites => self.selected_site = None,
+            ProfileTab::Telescopes => self.selected_telescope = None,
+            ProfileTab::Cameras | ProfileTab::Dslr => self.selected_camera = None,
+            ProfileTab::Lenses => self.selected_lens = None,
+            ProfileTab::Smart => self.selected_smart = None,
+        }
+    }
+
+    fn request_delete_profile(&mut self) {
+        let tab = self.profile_tab;
         let Some(id) = self.selected_profile().cloned() else {
             return;
         };
-        let kind = match self.profile_tab {
+        if !self.profile_selected_in_tab() {
+            return;
+        }
+        let kind = match tab {
             ProfileTab::Sites => ProfileKind::Site,
             ProfileTab::Telescopes => ProfileKind::Telescope,
             ProfileTab::Cameras | ProfileTab::Dslr => ProfileKind::Camera,
+            ProfileTab::Lenses => ProfileKind::Lens,
             ProfileTab::Smart => ProfileKind::Smart,
         };
         let usages = profile_usages(&self.journal, kind, &id);
         if !usages.is_empty() {
-            let name = self.profile_name(&id);
+            let name = self.profile_name_in_tab(tab, &id);
             self.notice = Some(usage_message(&name, &usages));
             return;
         }
-        match self.profile_tab {
+        self.pending_profile_delete = Some((tab, id));
+    }
+
+    fn remove_profile(&mut self, tab: ProfileTab, id: &str) {
+        match tab {
             ProfileTab::Sites => {
                 self.journal.sites.retain(|site| site.id != id);
                 self.selected_site = self.journal.sites.first().map(|site| site.id.clone());
@@ -1165,6 +1320,10 @@ impl App {
                     .find(|item| item.kind == CameraKind::Dslr)
                     .map(|item| item.id.clone());
             }
+            ProfileTab::Lenses => {
+                self.journal.lenses.retain(|item| item.id != id);
+                self.selected_lens = self.journal.lenses.first().map(|item| item.id.clone());
+            }
             ProfileTab::Smart => {
                 self.journal.smart_scopes.retain(|item| item.id != id);
                 self.selected_smart = self
@@ -1176,8 +1335,8 @@ impl App {
         }
     }
 
-    fn profile_name(&self, id: &str) -> String {
-        let name = match self.profile_tab {
+    fn profile_name_in_tab(&self, tab: ProfileTab, id: &str) -> String {
+        let name = match tab {
             ProfileTab::Sites => self
                 .journal
                 .sites
@@ -1196,6 +1355,12 @@ impl App {
                 .iter()
                 .find(|item| item.id == id)
                 .map(|item| item.name.as_str()),
+            ProfileTab::Lenses => self
+                .journal
+                .lenses
+                .iter()
+                .find(|item| item.id == id)
+                .map(|item| item.name.as_str()),
             ProfileTab::Smart => self
                 .journal
                 .smart_scopes
@@ -1206,12 +1371,62 @@ impl App {
         name.unwrap_or("").to_string()
     }
 
+    fn profile_kind_label(tab: ProfileTab) -> &'static str {
+        match tab {
+            ProfileTab::Sites => "site",
+            ProfileTab::Telescopes => "télescope",
+            ProfileTab::Cameras => "caméra astro",
+            ProfileTab::Dslr => "reflex",
+            ProfileTab::Lenses => "objectif",
+            ProfileTab::Smart => "télescope intelligent",
+        }
+    }
+
+    fn confirm_delete_profile(&mut self, ctx: &egui::Context) {
+        let Some((tab, id)) = self.pending_profile_delete.clone() else {
+            return;
+        };
+        let kind = Self::profile_kind_label(tab);
+        let profile_name = self.profile_name_in_tab(tab, &id);
+        let name = display_name(&profile_name);
+        let mut open = true;
+        let mut confirm = false;
+        let mut dismiss = false;
+        egui::Window::new("Supprimer le profil")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(format!("Supprimer {kind} « {name} » ?"));
+                ui.label("Cette entrée sera retirée du journal. Les soirées déjà enregistrées ne sont pas modifiées.");
+                ui.horizontal(|ui| {
+                    if ui.button("Annuler").clicked() {
+                        dismiss = true;
+                    }
+                    if ui.button("Supprimer").clicked() {
+                        confirm = true;
+                    }
+                });
+            });
+        if confirm {
+            self.pending_profile_delete = None;
+            self.remove_profile(tab, &id);
+            if self.profile_tab == tab {
+                self.ensure_profile_selection();
+            }
+        } else if dismiss || !open {
+            self.pending_profile_delete = None;
+        }
+    }
+
     fn profile_form(&mut self, ui: &mut egui::Ui) {
         match self.profile_tab {
             ProfileTab::Sites => self.site_form(ui),
             ProfileTab::Telescopes => self.telescope_form(ui),
             ProfileTab::Cameras => self.astro_camera_form(ui),
             ProfileTab::Dslr => self.dslr_form(ui),
+            ProfileTab::Lenses => self.lens_form(ui),
             ProfileTab::Smart => self.smart_form(ui),
         }
     }
@@ -1236,7 +1451,7 @@ impl App {
             -500.0..=9000.0,
             1.0,
         );
-        opt_u8(ui, "Bortle (1 à 9)", &mut site.bortle, 4, 1..=9);
+        opt_f32(ui, "Bortle (1 à 9)", &mut site.bortle, 4.0, 1.0..=9.0, 0.1);
         notes_field(ui, &mut site.notes);
     }
 
@@ -1315,6 +1530,79 @@ impl App {
         labeled(ui, "Monture", &mut camera.mount, "RF");
         opt_f32(ui, "Facteur de crop", &mut camera.crop_factor, 1.0, 1.0..=3.0, 0.01);
         notes_field(ui, &mut camera.notes);
+    }
+
+    fn lens_form(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.selected_lens.clone() else {
+            ui.label("Sélectionnez un objectif ou ajoutez-en un.");
+            return;
+        };
+        let Some(lens) = self.journal.lenses.iter_mut().find(|item| item.id == id) else {
+            ui.label("Sélectionnez un objectif ou ajoutez-en un.");
+            return;
+        };
+        let kind = lens.kind;
+        labeled(ui, "Nom", &mut lens.name, "RF 24-105");
+        enum_combo(
+            ui,
+            "lens-kind",
+            "Type",
+            &mut lens.kind,
+            &LensKind::all().map(|value| (value, value.label())),
+        );
+        if lens.kind != kind {
+            match lens.kind {
+                LensKind::Fixed => {
+                    lens.focal_min_mm = None;
+                    lens.focal_max_mm = None;
+                    if lens.focal_mm.is_none() {
+                        lens.focal_mm = Some(50.0);
+                    }
+                }
+                LensKind::Zoom => {
+                    lens.focal_mm = None;
+                    if lens.focal_min_mm.is_none() {
+                        lens.focal_min_mm = Some(24.0);
+                    }
+                    if lens.focal_max_mm.is_none() {
+                        lens.focal_max_mm = Some(105.0);
+                    }
+                }
+            }
+        }
+        match lens.kind {
+            LensKind::Fixed => {
+                opt_f32(
+                    ui,
+                    "Focale (mm)",
+                    &mut lens.focal_mm,
+                    50.0,
+                    1.0..=2000.0,
+                    1.0,
+                );
+            }
+            LensKind::Zoom => {
+                opt_f32(
+                    ui,
+                    "Focale min. (mm)",
+                    &mut lens.focal_min_mm,
+                    24.0,
+                    1.0..=2000.0,
+                    1.0,
+                );
+                opt_f32(
+                    ui,
+                    "Focale max. (mm)",
+                    &mut lens.focal_max_mm,
+                    105.0,
+                    1.0..=2000.0,
+                    1.0,
+                );
+            }
+        }
+        labeled(ui, "Ouverture", &mut lens.aperture, "f/2.8");
+        labeled(ui, "Monture", &mut lens.mount, "RF");
+        notes_field(ui, &mut lens.notes);
     }
 
     fn smart_form(&mut self, ui: &mut egui::Ui) {
@@ -1476,6 +1764,7 @@ impl eframe::App for App {
         });
         self.profiles_window(&ctx);
         self.confirm_delete(&ctx);
+        self.confirm_delete_profile(&ctx);
         self.notice_window(&ctx);
         self.persist();
     }
@@ -1819,16 +2108,101 @@ fn describe_instrument(instrument: &Instrument, catalog: &Catalog) -> String {
             Some(name) => format!("Télescope intelligent : {name}"),
             None => "Télescope intelligent : aucun".to_string(),
         },
+        InstrumentKind::Dslr => {
+            let body = Catalog::find(&catalog.dslr_bodies, &instrument.camera_id)
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("aucun boîtier");
+            let lens = Catalog::find(&catalog.lenses, &instrument.lens_id)
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("aucun objectif");
+            format!("Reflex : {body} · Objectif : {lens}")
+        }
         InstrumentKind::Telescope => {
             let scope = Catalog::find(&catalog.telescopes, &instrument.telescope_id)
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or("aucun télescope");
-            let camera = Catalog::find(&catalog.cameras, &instrument.camera_id)
+            let camera = Catalog::find(&catalog.astro_cameras, &instrument.camera_id)
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or("aucune caméra");
             format!("Télescope : {scope} · Caméra : {camera}")
         }
     }
+}
+
+fn sanitize_instrument(instrument: &mut Instrument) {
+    match instrument.kind {
+        InstrumentKind::Telescope => {
+            instrument.smart_id = None;
+            instrument.lens_id = None;
+        }
+        InstrumentKind::Dslr => {
+            instrument.telescope_id = None;
+            instrument.smart_id = None;
+        }
+        InstrumentKind::Smart => {
+            instrument.telescope_id = None;
+            instrument.camera_id = None;
+            instrument.lens_id = None;
+        }
+    }
+}
+
+fn sanitize_target_instrument(target: &mut Target) {
+    match target.instrument_kind {
+        TargetInstrumentKind::Session => {
+            target.telescope_id = None;
+            target.camera_id = None;
+            target.lens_id = None;
+            target.smart_id = None;
+        }
+        TargetInstrumentKind::Telescope => {
+            target.lens_id = None;
+            target.lens_focal_mm = None;
+            target.smart_id = None;
+        }
+        TargetInstrumentKind::Dslr => {
+            target.telescope_id = None;
+            target.smart_id = None;
+        }
+        TargetInstrumentKind::Smart => {
+            target.telescope_id = None;
+            target.camera_id = None;
+            target.lens_id = None;
+            target.lens_focal_mm = None;
+        }
+    }
+}
+
+fn dslr_zoom_focal_field(
+    ui: &mut egui::Ui,
+    salt: &str,
+    lenses: &[DslrLens],
+    lens_id: &Option<String>,
+    focal: &mut Option<f32>,
+) {
+    let Some(lens) = find_lens(lenses, lens_id.as_deref()) else {
+        return;
+    };
+    if !lens.is_zoom() {
+        *focal = None;
+        return;
+    }
+    let Some((min, max)) = lens.focal_range() else {
+        return;
+    };
+    let default = lens.focal_min_mm.unwrap_or(min);
+    ui.horizontal(|ui| {
+        ui.label("Focale utilisée (mm)");
+        let value = focal.get_or_insert(default);
+        ui.push_id(salt, |ui| {
+            ui.add(
+                egui::DragValue::new(value)
+                    .range(min..=max)
+                    .speed(1.0)
+                    .fixed_decimals(0),
+            );
+        });
+    });
 }
 
 fn load_thumbnail(path: &std::path::Path) -> Option<egui::ColorImage> {

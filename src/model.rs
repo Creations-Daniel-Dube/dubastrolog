@@ -35,6 +35,7 @@ pub struct Journal {
     pub sites: Vec<Site>,
     pub telescopes: Vec<Telescope>,
     pub cameras: Vec<Camera>,
+    pub lenses: Vec<DslrLens>,
     pub smart_scopes: Vec<SmartTelescope>,
     pub sessions: Vec<Session>,
 }
@@ -47,7 +48,7 @@ pub struct Site {
     pub latitude: String,
     pub longitude: String,
     pub altitude_m: Option<f32>,
-    pub bortle: Option<u8>,
+    pub bortle: Option<f32>,
     pub notes: String,
 }
 
@@ -86,6 +87,66 @@ pub struct Camera {
     pub notes: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LensKind {
+    #[default]
+    #[serde(rename = "fixed")]
+    Fixed,
+    #[serde(rename = "zoom")]
+    Zoom,
+}
+
+impl LensKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fixed => "Focale fixe",
+            Self::Zoom => "Zoom",
+        }
+    }
+
+    pub fn all() -> [Self; 2] {
+        [Self::Fixed, Self::Zoom]
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DslrLens {
+    pub id: String,
+    pub name: String,
+    pub kind: LensKind,
+    pub focal_mm: Option<f32>,
+    pub focal_min_mm: Option<f32>,
+    pub focal_max_mm: Option<f32>,
+    pub aperture: String,
+    pub mount: String,
+    pub notes: String,
+}
+
+impl DslrLens {
+    pub fn create() -> Self {
+        Self {
+            id: new_id(),
+            focal_mm: Some(50.0),
+            ..Self::default()
+        }
+    }
+
+    pub fn is_zoom(&self) -> bool {
+        self.kind == LensKind::Zoom
+    }
+
+    pub fn focal_range(&self) -> Option<(f32, f32)> {
+        match self.kind {
+            LensKind::Fixed => self.focal_mm.map(|focal| (focal, focal)),
+            LensKind::Zoom => match (self.focal_min_mm, self.focal_max_mm) {
+                (Some(min), Some(max)) if min > 0.0 && max >= min => Some((min, max)),
+                _ => None,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SmartTelescope {
@@ -102,6 +163,8 @@ pub enum InstrumentKind {
     #[default]
     #[serde(rename = "telescope")]
     Telescope,
+    #[serde(rename = "dslr")]
+    Dslr,
     #[serde(rename = "smart")]
     Smart,
 }
@@ -112,6 +175,7 @@ pub struct Instrument {
     pub kind: InstrumentKind,
     pub telescope_id: Option<String>,
     pub camera_id: Option<String>,
+    pub lens_id: Option<String>,
     pub smart_id: Option<String>,
 }
 
@@ -213,6 +277,8 @@ pub enum TargetInstrumentKind {
     Session,
     #[serde(rename = "telescope")]
     Telescope,
+    #[serde(rename = "dslr")]
+    Dslr,
     #[serde(rename = "smart")]
     Smart,
 }
@@ -237,6 +303,8 @@ pub struct Target {
     pub instrument_kind: TargetInstrumentKind,
     pub telescope_id: Option<String>,
     pub camera_id: Option<String>,
+    pub lens_id: Option<String>,
+    pub lens_focal_mm: Option<f32>,
     pub smart_id: Option<String>,
     pub filter: String,
     pub exposure_s: Option<f32>,
@@ -331,6 +399,7 @@ pub enum ProfileKind {
     Site,
     Telescope,
     Camera,
+    Lens,
     Smart,
 }
 
@@ -363,8 +432,11 @@ pub fn profile_usages(journal: &Journal, kind: ProfileKind, id: &str) -> Vec<Str
                 }
             }
             ProfileKind::Camera => {
-                if session.instrument.kind == InstrumentKind::Telescope
-                    && session.instrument.camera_id.as_deref() == Some(id)
+                if session.instrument.camera_id.as_deref() == Some(id)
+                    && matches!(
+                        session.instrument.kind,
+                        InstrumentKind::Telescope | InstrumentKind::Dslr
+                    )
                 {
                     lines.push(evening.clone());
                 }
@@ -372,6 +444,23 @@ pub fn profile_usages(journal: &Journal, kind: ProfileKind, id: &str) -> Vec<Str
                     if target.instrument_kind == TargetInstrumentKind::Telescope
                         && target.camera_id.as_deref() == Some(id)
                     {
+                        lines.push(format!("{evening}, objet {}", object_label(&target.name)));
+                    }
+                    if target.instrument_kind == TargetInstrumentKind::Dslr
+                        && target.camera_id.as_deref() == Some(id)
+                    {
+                        lines.push(format!("{evening}, objet {}", object_label(&target.name)));
+                    }
+                }
+            }
+            ProfileKind::Lens => {
+                if session.instrument.kind == InstrumentKind::Dslr
+                    && session.instrument.lens_id.as_deref() == Some(id)
+                {
+                    lines.push(evening.clone());
+                }
+                for target in &session.targets {
+                    if target.lens_id.as_deref() == Some(id) {
                         lines.push(format!("{evening}, objet {}", object_label(&target.name)));
                     }
                 }
@@ -393,6 +482,10 @@ pub fn profile_usages(journal: &Journal, kind: ProfileKind, id: &str) -> Vec<Str
         }
     }
     lines
+}
+
+pub fn find_lens<'a>(lenses: &'a [DslrLens], id: Option<&str>) -> Option<&'a DslrLens> {
+    id.and_then(|id| lenses.iter().find(|lens| lens.id == id))
 }
 
 pub fn object_label(name: &str) -> &str {
@@ -422,6 +515,16 @@ mod tests {
     }
 
     #[test]
+    fn legacy_site_bortle_integer_deserializes_as_float() {
+        let journal: Journal = serde_json::from_str(
+            r#"{"sites":[{"id":"s1","name":"Camp","latitude":"","longitude":"","bortle":6}]}"#,
+        )
+        .unwrap();
+        assert_eq!(journal.sites.len(), 1);
+        assert_eq!(journal.sites[0].bortle, Some(6.0));
+    }
+
+    #[test]
     fn legacy_camera_json_defaults_to_astro() {
         let journal: Journal = serde_json::from_str(
             r#"{"cameras":[{"id":"c1","name":"ASI585","sensor":"IMX585","cooled":true}]}"#,
@@ -440,7 +543,7 @@ mod tests {
             latitude: "45.5 N".to_string(),
             longitude: "73.5 O".to_string(),
             altitude_m: Some(30.0),
-            bortle: Some(6),
+            bortle: Some(5.9),
             notes: "Maison".to_string(),
         });
         journal.telescopes.push(Telescope {

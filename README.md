@@ -19,7 +19,8 @@
 - **Photos et documents** — Joindre des images ou fichiers à un objet, avec légende et aperçu ; ouvrir un fichier joint dans une application externe.
 - **Liste des soirées** — Parcourir l’historique et filtrer la liste par texte (date, site, notes, noms d’objets).
 - **Recherche** — Retrouver les photos liées à un nom d’objet, et lister les soirées d’une année donnée.
-- **Profils réutilisables** — Gérer des sites d’observation, télescopes, caméras astro, appareils reflex et télescopes intelligents, pour les réutiliser d’une soirée à l’autre.
+- **Profils réutilisables** — Gérer des sites d’observation, télescopes, caméras astro, appareils reflex, objectifs (fixe ou zoom) et télescopes intelligents, pour les réutiliser d’une soirée à l’autre ; supprimer un profil inutilisé (avec confirmation).
+- **Soirée au reflex** — Choisir boîtier et objectif pour une soirée ; pour un zoom, indiquer la focale utilisée sur chaque objet photographié.
 - **Suppression** — Supprimer une soirée (avec confirmation) ainsi que les pièces jointes qui lui sont associées.
 
 ---
@@ -39,5 +40,6 @@
 - **Photos and documents** — Attach images or files to a target, with captions and previews; open an attachment in an external app.
 - **Night list** — Browse your history and filter nights by text (date, site, notes, target names).
 - **Search** — Find photos tied to a target name, and list all nights in a given year.
-- **Reusable profiles** — Manage observing sites, telescopes, astro cameras, DSLR bodies, and smart telescopes for reuse across nights.
+- **Reusable profiles** — Manage observing sites, telescopes, astro cameras, DSLR bodies, lenses (prime or zoom), and smart telescopes for reuse across nights; remove an unused profile (with confirmation).
+- **DSLR nights** — Pick body and lens for a night; for a zoom lens, record the focal length used on each photographed target.
 - **Deletion** — Remove a night (with confirmation) and its associated attachments.

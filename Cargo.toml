@@ -1,6 +1,6 @@
 [package]
 name = "dubastrolog"
-version = "0.1.100"
+version = "0.1.260"
 edition = "2024"
 description = "Journal d'observation et d'astrophotographie"
 publish = false
