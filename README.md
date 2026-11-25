@@ -1,6 +1,6 @@
 # dubastrolog
 
-**Version : 0.1.100**
+**Version : 0.1.500**
 
 ---
 
